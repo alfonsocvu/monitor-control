@@ -9,9 +9,8 @@
 
 class BrightnessController {
  private:
-  // Display refs are cheap identifiers, safe to cache. Handles are not: an
-  // open handle holds libddcutil's per display mutex, which starves the watch
-  // thread's own detection. Handles live only for one transaction.
+  // Handles are opened per transaction: an open one holds libddcutil's
+  // per-display lock and starves the watch thread.
   struct Display {
     DDCA_Display_Ref ref;
     std::string name;
@@ -20,26 +19,29 @@ class BrightnessController {
   };
 
   std::vector<Display> displays;
-  // Written by libddcutil's watch thread, consumed by the keyboard thread.
   static std::atomic<bool> displays_stale;
   static std::atomic<int64_t> last_event_millis;
   // TODO Make them configurable
-  const int BRIGHTNESS_STEP = 10;       // Adjust brightness by 10% each time
-  const uint8_t VCP_BRIGHTNESS = 0x10;  // VCP code for brightness
-  // A DP link can take seconds to retrain after an input switch. DDC rides the
-  // same AUX channel, so touching the bus inside this window is what wedges a
-  // monitor mid-negotiation.
+  const int BRIGHTNESS_STEP = 10;
+  const uint8_t VCP_BRIGHTNESS = 0x10;
+  // DDC shares the DP AUX channel; using it while the link retrains wedges the
+  // monitor.
   const int64_t SETTLE_MILLIS = 5000;
   const int MAX_CONSECUTIVE_FAILURES = 2;
-  // A monitor that keeps HPD asserted while switched to another input never
-  // raises a watch event, so a benched display gets an occasional retry.
+  // A monitor on another input keeps HPD asserted and never raises an event.
   const int64_t BENCH_RETRY_MILLIS = 30000;
+  // After a wake, libddcutil may never report a monitor as reconnected.
+  const int64_t RESCAN_RETRY_MILLIS = 30000;
+  size_t most_displays_seen = 0;
+  int64_t last_rescan_millis = 0;
+  bool rescan_wanted = false;
 
   static int64_t nowMillis();
   static void onDisplayStatusEvent(DDCA_Display_Status_Event event);
   void startWatchingDisplays();
   bool loadDisplays();
   bool redetectDisplays();
+  bool shouldRetryRescan();
   bool isUsable(const Display& display);
   void noteResult(Display& display, DDCA_Status rc);
   DDCA_Status readBrightness(const Display& display, int* value);

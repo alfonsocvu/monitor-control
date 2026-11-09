@@ -17,10 +17,7 @@ void BrightnessController::onDisplayStatusEvent(
             << ddca_display_event_type_name(event.event_type) << " on "
             << event.connector_name << std::endl;
 
-  // Runs on libddcutil's watch thread, so only record the change here.
-  // Rediscovery happens on the keyboard thread, which keeps display access
-  // single threaded and collapses the burst of events an MST chain emits into
-  // one rescan. ddca_redetect_displays() also refuses recursive calls.
+  // Runs on the watch thread; the rescan is deferred to the keyboard thread.
   if (event.event_type == DDCA_EVENT_DISPLAY_CONNECTED ||
       event.event_type == DDCA_EVENT_DISPLAY_DISCONNECTED ||
       event.event_type == DDCA_EVENT_DDC_ENABLED) {
@@ -35,7 +32,6 @@ BrightnessController::~BrightnessController() {
 }
 
 bool BrightnessController::init() {
-  // Initialize libddcutil
   DDCA_Status rc =
       ddca_init(nullptr, DDCA_SYSLOG_NOT_SET, DDCA_INIT_OPTIONS_NONE);
   if (rc != 0) {
@@ -60,9 +56,7 @@ void BrightnessController::startWatchingDisplays() {
     return;
   }
 
-  // libddcutil defaults to no stabilization delay, so it reports a connect the
-  // instant udev fires, while the DP link is still retraining. Have it wait for
-  // /sys/class/drm to settle before telling us anything.
+  // The default of no delay reports connects while the DP link is retraining.
   DDCA_DW_Settings watch_settings;
   if (ddca_get_display_watch_settings(&watch_settings) == 0) {
     watch_settings.initial_stabilization_millisec = 1000;
@@ -102,7 +96,6 @@ bool BrightnessController::loadDisplays() {
               << std::endl;
   }
 
-  // The refs outlive the list; only the list itself is owned by the caller.
   ddca_free_display_info_list(dlist);
 
   if (displays.empty()) {
@@ -110,13 +103,24 @@ bool BrightnessController::loadDisplays() {
     return false;
   }
 
+  if (displays.size() > most_displays_seen) {
+    most_displays_seen = displays.size();
+  }
+
   std::cout << "Tracking " << displays.size() << " display(s)" << std::endl;
   return true;
 }
 
+bool BrightnessController::shouldRetryRescan() {
+  if (displays.size() >= most_displays_seen && !rescan_wanted) return false;
+  return nowMillis() - last_rescan_millis >= RESCAN_RETRY_MILLIS;
+}
+
 bool BrightnessController::redetectDisplays() {
-  // Invalidates every existing display ref and rescans the i2c buses. Safe
-  // here only because no handle is held open outside a transaction.
+  last_rescan_millis = nowMillis();
+  rescan_wanted = false;
+
+  // Invalidates every display ref; safe because no handle is held open.
   DDCA_Status rc = ddca_redetect_displays();
   if (rc != 0) {
     std::cerr << "ddca_redetect_displays() failed: " << ddca_rc_name(rc)
@@ -139,7 +143,6 @@ void BrightnessController::noteResult(Display& display, DDCA_Status rc) {
     return;
   }
 
-  // Brief contention with the watch thread says nothing about the display.
   if (rc == DDCRC_LOCKED) return;
 
   display.consecutive_failures++;
@@ -151,20 +154,20 @@ void BrightnessController::noteResult(Display& display, DDCA_Status rc) {
   if (display.consecutive_failures == MAX_CONSECUTIVE_FAILURES) {
     std::cerr << "  " << display.name << " is not responding, skipping it"
               << " until a display event or retry window" << std::endl;
+    rescan_wanted = true;
   }
 }
 
 DDCA_Status BrightnessController::readBrightness(const Display& display,
                                                  int* value) {
   DDCA_Display_Handle dh = nullptr;
-  // wait == false: never block the keyboard thread on the watch thread.
   DDCA_Status rc = ddca_open_display2(display.ref, false, &dh);
   if (rc != 0) return rc;
 
   DDCA_Non_Table_Vcp_Value valrec;
   rc = ddca_get_non_table_vcp_value(dh, VCP_BRIGHTNESS, &valrec);
   if (rc == 0) {
-    *value = valrec.sh << 8 | valrec.sl;  // Current value
+    *value = valrec.sh << 8 | valrec.sl;
   }
 
   ddca_close_display(dh);
@@ -184,8 +187,6 @@ DDCA_Status BrightnessController::writeBrightness(const Display& display,
 }
 
 void BrightnessController::adjustBrightness(int delta) {
-  // Stay off the bus entirely while a link is still coming up. Rescanning or
-  // writing VCP values mid-retrain can leave the monitor without an image.
   int64_t since_event = nowMillis() - last_event_millis.load();
   if (displays_stale.load() && since_event < SETTLE_MILLIS) {
     std::cout << "Display link still settling, ignoring keypress" << std::endl;
@@ -195,12 +196,15 @@ void BrightnessController::adjustBrightness(int delta) {
   if (displays_stale.exchange(false)) {
     std::cout << "Display configuration changed, rescanning" << std::endl;
     redetectDisplays();
+  } else if (shouldRetryRescan()) {
+    std::cout << "Tracking " << displays.size() << " of " << most_displays_seen
+              << " display(s) seen, rescanning" << std::endl;
+    redetectDisplays();
   }
 
   int current = 0;
   bool read_ok = false;
 
-  // Current brightness comes from the first display that answers.
   for (Display& display : displays) {
     if (!isUsable(display)) continue;
 
@@ -221,17 +225,18 @@ void BrightnessController::adjustBrightness(int delta) {
   if (target < 0) target = 0;
   if (target > 100) target = 100;
 
-  bool write_ok = false;
+  size_t written = 0;
   for (Display& display : displays) {
     if (!isUsable(display)) continue;
 
     DDCA_Status rc = writeBrightness(display, target);
     noteResult(display, rc);
-    if (rc == 0) write_ok = true;
+    if (rc == 0) written++;
   }
 
-  if (write_ok) {
-    std::cout << "   " << current << "% → " << target << "%" << std::endl;
+  if (written > 0) {
+    std::cout << "   " << current << "% → " << target << "% on " << written
+              << " of " << most_displays_seen << " display(s)" << std::endl;
   }
 }
 
