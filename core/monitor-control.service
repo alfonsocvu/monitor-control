@@ -1,10 +1,10 @@
 [Unit]
-Description=Brightness Control Service
+Description=Monitor Control Service
 After=multi-user.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/brightness_control
+ExecStart=/usr/local/bin/monitor-control
 Restart=on-failure
 User=root
 
