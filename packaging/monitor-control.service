@@ -1,0 +1,19 @@
+# Packaged unit. Upstream's core/monitor-control.service points at the
+# Makefile's /usr/local/bin install; the .deb puts the binary in /usr/bin.
+[Unit]
+Description=Monitor Control: brightness keys for external monitors over DDC/CI
+# i2c-dev must be loaded before ddcutil scans the buses (the package ships
+# /usr/lib/modules-load.d/monitor-control.conf for that).
+After=systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/monitor-control
+# monitor-control exits 0 when it finds no monitors or keyboards (e.g.
+# displays not up yet at boot), which Restart=on-failure would never retry.
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

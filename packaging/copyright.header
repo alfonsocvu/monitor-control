@@ -1,0 +1,7 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: monitor-control
+Source: https://github.com/alfonsocv12/monitor-control
+
+Files: *
+Copyright: 2025 Alfonso Villalobos Ulate
+License: Expat

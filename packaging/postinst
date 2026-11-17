@@ -1,0 +1,28 @@
+#!/bin/sh
+# Service handling mirrors what dh_installsystemd generates.
+set -e
+
+unit=monitor-control.service
+
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+	# modules-load.d only applies at boot; load it now for this session.
+	modprobe i2c-dev 2>/dev/null || true
+
+	# was-enabled defaults to true, so new installations enable the unit.
+	if deb-systemd-helper --quiet was-enabled "$unit"; then
+		deb-systemd-helper enable "$unit" >/dev/null || true
+	else
+		deb-systemd-helper update-state "$unit" >/dev/null || true
+	fi
+
+	if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+		if [ -n "$2" ]; then
+			deb-systemd-invoke restart "$unit" >/dev/null || true
+		else
+			deb-systemd-invoke start "$unit" >/dev/null || true
+		fi
+	fi
+fi
+
+exit 0
