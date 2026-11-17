@@ -1,5 +1,0 @@
-monitor-control (0.1.0) unstable; urgency=medium
-
-  * First Debian package, built with Bazel from the monorepo.
-
- -- Alfonso Villalobos Ulate <alfonsocvu@gmail.com>  Tue, 17 Nov 2026 10:45:00 -0600
