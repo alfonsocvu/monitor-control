@@ -1,0 +1,66 @@
+# Builds the .deb and attaches it to the release when a release is published.
+# The tag is the version: v1.2.0 or 1.2.0 -> monitor-control_1.2.0_amd64.deb.
+#
+# Run it by hand (Actions -> Release .deb -> Run workflow) to test the build
+# without a release; the .deb is then kept as a workflow artifact instead.
+name: Release .deb
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deb:
+    runs-on: ubuntu-latest
+    # Built against Debian stable's libraries, so the package installs there
+    # and on anything newer (testing/sid).
+    container: debian:trixie
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential clang libddcutil-dev ca-certificates gh
+
+      - uses: actions/checkout@v4
+
+      - name: Pick version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          PUBLISHED_AT: ${{ github.event.release.published_at }}
+        run: |
+          if [ -n "$TAG" ]; then
+            version="${TAG#v}"
+            epoch=$(date -d "$PUBLISHED_AT" +%s)
+          else
+            version="0.0.0~dev.${GITHUB_SHA::8}"
+            epoch=$(date +%s)
+          fi
+          echo "VERSION=$version" >>"$GITHUB_ENV"
+          echo "SOURCE_DATE_EPOCH=$epoch" >>"$GITHUB_ENV"
+          echo "DEB=monitor-control_${version}_$(dpkg --print-architecture).deb" >>"$GITHUB_ENV"
+
+      - name: Build
+        run: make -C core compile
+
+      - name: Package
+        run: packaging/build-deb.sh core/build/main "$VERSION" "$(dpkg --print-architecture)" "$DEB"
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" "$DEB" --clobber
+
+      - name: Keep as artifact
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DEB }}
+          path: ${{ env.DEB }}
