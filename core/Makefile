@@ -3,7 +3,7 @@ CXXFLAGS = -std=c++17 -Wall -Wextra -O2
 LDFLAGS = -lddcutil
 TARGET = ./build/main
 # Must match ExecStart in monitor-control.service
-INSTALL_PATH = /usr/local/bin/brightness_control
+INSTALL_PATH = /usr/local/bin/monitor-control
 SRC = ./src/main.cpp ./src/KeyboardController/KeyboardController.cpp ./src/BrightnessController/BrightnessController.cpp
 
 all: $(TARGET)
